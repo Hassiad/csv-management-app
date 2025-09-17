@@ -8,25 +8,18 @@ class CsvService {
     this.sessions = new Map(); // In-memory storage for demo
     this.uploadsDir = path.join(__dirname, "../../uploads");
 
-    // Ensure uploads directory exists
-    this.ensureUploadsDir();
+    // Start cleanup process
+    this.startSessionCleanup();
   }
 
-  async ensureUploadsDir() {
+  async uploadCSV(file, fileType, providedSessionId = null) {
     try {
-      await fs.mkdir(this.uploadsDir, { recursive: true });
-    } catch (error) {
-      console.warn("Failed to create uploads directory:", error.message);
-    }
-  }
+      console.log(`Uploading ${fileType} file: ${file.originalname}`);
 
-  async uploadCSV(file, fileType) {
-    try {
-      console.log(`Uploading ${fileType} file:`, file.originalname);
+      // Use provided session ID or create new one
+      const sessionId = providedSessionId || uuidv4();
 
-      const sessionId = uuidv4();
       const parsedData = await CsvParser.parseCSV(file.path);
-
       console.log(`Parsed ${parsedData.data.length} rows for ${fileType}`);
 
       // Validate headers based on file type
@@ -49,13 +42,12 @@ class CsvService {
       // Sanitize data
       const sanitizedData = CsvParser.sanitizeData(parsedData.data);
 
-      // Initialize session if it doesn't exist
+      // Initialize or get existing session data
       if (!this.sessions.has(sessionId)) {
-        this.sessions.set(sessionId, {});
         console.log(`Created new session: ${sessionId}`);
+        this.sessions.set(sessionId, {});
       }
 
-      // Store session data
       const sessionData = this.sessions.get(sessionId);
       sessionData[fileType] = {
         headers: parsedData.headers,
@@ -65,7 +57,9 @@ class CsvService {
       };
 
       console.log(`Stored ${fileType} data in session ${sessionId}`);
-      console.log(`Session now contains:`, Object.keys(sessionData));
+      console.log(
+        `Session now contains: [${Object.keys(sessionData).join(", ")}]`
+      );
 
       // Clean up uploaded file after processing
       await this.cleanupFile(file.path);
@@ -78,90 +72,9 @@ class CsvService {
         rowCount: sanitizedData.length,
       };
     } catch (error) {
-      console.error(`Upload error for ${fileType}:`, error);
       // Clean up on error
       if (file && file.path) {
         await this.cleanupFile(file.path);
-      }
-      throw error;
-    }
-  }
-
-  async uploadMultipleCSVs(files) {
-    try {
-      const sessionId = uuidv4();
-      console.log(`Creating multi-file session: ${sessionId}`);
-
-      // Initialize session
-      this.sessions.set(sessionId, {});
-      const sessionData = this.sessions.get(sessionId);
-
-      const results = {};
-
-      for (const [fileType, file] of Object.entries(files)) {
-        console.log(`Processing ${fileType} file:`, file.originalname);
-
-        const parsedData = await CsvParser.parseCSV(file.path);
-        console.log(`Parsed ${parsedData.data.length} rows for ${fileType}`);
-
-        // Validate headers based on file type
-        const expectedHeaders = this.getExpectedHeaders(fileType);
-        const validation = CsvParser.validateHeaders(
-          parsedData.headers,
-          expectedHeaders
-        );
-
-        if (!validation.isValid) {
-          // Clean up all uploaded files
-          await Promise.all(
-            Object.values(files).map((f) => this.cleanupFile(f.path))
-          );
-          throw new Error(
-            `Invalid headers for ${fileType}. Missing: ${validation.missingHeaders.join(
-              ", "
-            )}`
-          );
-        }
-
-        // Sanitize data
-        const sanitizedData = CsvParser.sanitizeData(parsedData.data);
-
-        // Store in session
-        sessionData[fileType] = {
-          headers: parsedData.headers,
-          data: sanitizedData,
-          originalFileName: file.originalname,
-          uploadTime: new Date().toISOString(),
-        };
-
-        results[fileType] = {
-          headers: parsedData.headers,
-          data: sanitizedData,
-          rowCount: sanitizedData.length,
-        };
-
-        // Clean up uploaded file
-        await this.cleanupFile(file.path);
-      }
-
-      console.log(
-        `Multi-file session ${sessionId} created with:`,
-        Object.keys(sessionData)
-      );
-
-      return {
-        sessionId,
-        files: results,
-      };
-    } catch (error) {
-      console.error("Multi-file upload error:", error);
-      // Clean up all files on error
-      if (files) {
-        await Promise.all(
-          Object.values(files).map((file) =>
-            file && file.path ? this.cleanupFile(file.path) : Promise.resolve()
-          )
-        );
       }
       throw error;
     }
@@ -172,12 +85,14 @@ class CsvService {
       console.log(`Updating ${fileType} data for session ${sessionId}`);
 
       if (!this.sessions.has(sessionId)) {
-        console.log(`Available sessions:`, Array.from(this.sessions.keys()));
+        console.log("Available sessions:", Array.from(this.sessions.keys()));
         throw new Error("Session not found");
       }
 
       const sessionData = this.sessions.get(sessionId);
-      console.log(`Session data contains:`, Object.keys(sessionData));
+      console.log(
+        `Session data contains: [${Object.keys(sessionData).join(", ")}]`
+      );
 
       if (!sessionData[fileType]) {
         throw new Error(`${fileType} data not found in session`);
@@ -190,7 +105,9 @@ class CsvService {
       sessionData[fileType].data = sanitizedData;
       sessionData[fileType].lastModified = new Date().toISOString();
 
-      console.log(`Updated ${fileType} data: ${sanitizedData.length} rows`);
+      console.log(
+        `Successfully updated ${fileType}: ${sanitizedData.length} rows`
+      );
 
       return {
         success: true,
@@ -206,14 +123,14 @@ class CsvService {
   async getCSVData(sessionId, fileType) {
     try {
       console.log(`Getting ${fileType} data for session ${sessionId}`);
+      console.log("Available sessions:", Array.from(this.sessions.keys()));
 
       if (!this.sessions.has(sessionId)) {
-        console.log(`Available sessions:`, Array.from(this.sessions.keys()));
         throw new Error("Session not found");
       }
 
       const sessionData = this.sessions.get(sessionId);
-      console.log(`Session data contains:`, Object.keys(sessionData));
+      console.log(`Session contains: [${Object.keys(sessionData).join(", ")}]`);
 
       if (!sessionData[fileType]) {
         throw new Error(`${fileType} data not found in session`);
@@ -226,25 +143,6 @@ class CsvService {
     }
   }
 
-  async getAllSessionData(sessionId) {
-    try {
-      console.log(`Getting all data for session ${sessionId}`);
-
-      if (!this.sessions.has(sessionId)) {
-        console.log(`Available sessions:`, Array.from(this.sessions.keys()));
-        throw new Error("Session not found");
-      }
-
-      const sessionData = this.sessions.get(sessionId);
-      console.log(`Session contains:`, Object.keys(sessionData));
-
-      return sessionData;
-    } catch (error) {
-      console.error("Get all session data error:", error);
-      throw error;
-    }
-  }
-
   async exportCSV(sessionId, fileType) {
     try {
       console.log(`Exporting ${fileType} for session ${sessionId}`);
@@ -252,13 +150,12 @@ class CsvService {
       const csvData = await this.getCSVData(sessionId, fileType);
 
       // Generate unique filename for export
-      const timestamp = Date.now();
-      const exportFileName = `${fileType}_${timestamp}.csv`;
+      const exportFileName = `${fileType}_${Date.now()}.csv`;
       const exportPath = path.join(this.uploadsDir, exportFileName);
 
       await CsvParser.writeCSV(csvData.data, csvData.headers, exportPath);
 
-      console.log(`Exported ${fileType} to:`, exportPath);
+      console.log(`Export completed: ${exportFileName}`);
 
       return {
         filePath: exportPath,
@@ -266,7 +163,7 @@ class CsvService {
         downloadUrl: `/uploads/${exportFileName}`,
       };
     } catch (error) {
-      console.error(`Export error for ${fileType}:`, error);
+      console.error("Export error:", error);
       throw error;
     }
   }
@@ -287,9 +184,10 @@ class CsvService {
         console.log(`Cleaned up session: ${sessionId}`);
         return true;
       }
+      console.log(`Session ${sessionId} not found for cleanup`);
       return false;
     } catch (error) {
-      console.error(`Session cleanup error:`, error);
+      console.error(`Error cleaning up session ${sessionId}:`, error);
       return false;
     }
   }
@@ -313,58 +211,72 @@ class CsvService {
     return headerMaps[fileType] || [];
   }
 
-  // Get session stats for debugging
-  getSessionStats() {
-    const stats = {
-      totalSessions: this.sessions.size,
-      sessions: {},
-    };
-
-    for (const [sessionId, sessionData] of this.sessions) {
-      stats.sessions[sessionId] = {
-        fileTypes: Object.keys(sessionData),
-        counts: {},
-      };
-
-      for (const [fileType, data] of Object.entries(sessionData)) {
-        stats.sessions[sessionId].counts[fileType] = data.data?.length || 0;
-      }
+  // Get session info for debugging
+  getSessionInfo(sessionId) {
+    if (!this.sessions.has(sessionId)) {
+      return null;
     }
 
-    return stats;
+    const sessionData = this.sessions.get(sessionId);
+    const info = {};
+
+    Object.keys(sessionData).forEach((fileType) => {
+      info[fileType] = {
+        rowCount: sessionData[fileType].data?.length || 0,
+        uploadTime: sessionData[fileType].uploadTime,
+        lastModified: sessionData[fileType].lastModified,
+        headers: sessionData[fileType].headers,
+      };
+    });
+
+    return info;
+  }
+
+  // Get all sessions (for debugging)
+  getAllSessions() {
+    const sessions = {};
+    this.sessions.forEach((data, sessionId) => {
+      sessions[sessionId] = this.getSessionInfo(sessionId);
+    });
+    return sessions;
   }
 
   // Cleanup old sessions periodically
   startSessionCleanup() {
     const cleanupInterval = setInterval(() => {
-      try {
-        const now = new Date();
-        let cleanedCount = 0;
+      const now = new Date();
+      let cleanedCount = 0;
 
-        for (const [sessionId, sessionData] of this.sessions) {
-          const shouldCleanup = Object.values(sessionData).some((fileData) => {
-            if (!fileData.uploadTime) return true;
-            const uploadTime = new Date(fileData.uploadTime);
-            const hoursDiff = (now - uploadTime) / (1000 * 60 * 60);
-            return hoursDiff > 24; // Clean up sessions older than 24 hours
-          });
+      for (const [sessionId, sessionData] of this.sessions) {
+        const shouldCleanup = Object.values(sessionData).some((fileData) => {
+          if (!fileData.uploadTime) return true;
+          const uploadTime = new Date(fileData.uploadTime);
+          const hoursDiff = (now - uploadTime) / (1000 * 60 * 60);
+          return hoursDiff > 24; // Clean up sessions older than 24 hours
+        });
 
-          if (shouldCleanup) {
-            this.sessions.delete(sessionId);
-            cleanedCount++;
-          }
+        if (shouldCleanup) {
+          this.sessions.delete(sessionId);
+          cleanedCount++;
         }
+      }
 
-        if (cleanedCount > 0) {
-          console.log(`Cleaned up ${cleanedCount} old sessions`);
-        }
-      } catch (error) {
-        console.error("Session cleanup error:", error);
+      if (cleanedCount > 0) {
+        console.log(`Cleaned up ${cleanedCount} old sessions`);
       }
     }, 60 * 60 * 1000); // Run every hour
 
-    // Return cleanup function
-    return () => clearInterval(cleanupInterval);
+    // Store reference for cleanup on shutdown
+    this.cleanupInterval = cleanupInterval;
+  }
+
+  // Graceful shutdown
+  shutdown() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    this.sessions.clear();
+    console.log("CSV Service shutdown completed");
   }
 }
 
